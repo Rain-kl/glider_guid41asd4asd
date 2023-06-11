@@ -18,7 +18,7 @@
 
 以下就是Glider的目录结构
 
-![Snipaste_2023-06-11_09-54-04](img\Snipaste_2023-06-11_09-54-04.png)
+![Snipaste_2023-06-11_09-54-04](https://github.com/Rain-kl/glider_guid41asd4asd/blob/master/img/Snipaste_2023-06-11_09-54-04.png)
 
 ## 创建配置文件
 
@@ -84,13 +84,13 @@ forward=...
 
 以下是glider对各协议的支持
 
-![Snipaste_2023-06-11_10-17-31](img\Snipaste_2023-06-11_10-17-31.png)
+![Snipaste_2023-06-11_10-17-31](https://github.com/Rain-kl/glider_guid41asd4asd/blob/master/img/Snipaste_2023-06-11_10-17-31.png)
 
 
 
 如果你用的是“窗口的冲突”，可以打开配置目录C:\Users\你用户名\\.config\clash\profiles
 
-![Snipaste_2023-06-11_10-15-18](img\Snipaste_2023-06-11_10-15-18.png)
+![Snipaste_2023-06-11_10-15-18](https://github.com/Rain-kl/glider_guid41asd4asd/blob/master/img/Snipaste_2023-06-11_10-15-18.png)
 
 用记事本打开yml，然后复制到我提供的转换器内，后续教程也放在那里了
 
@@ -100,7 +100,7 @@ forward=...
 
 或者创建run.cmd文件，在里面输入glider -config glider.conf来执行程序
 
-![Snipaste_2023-06-11_10-50-35](img\Snipaste_2023-06-11_10-50-35.png)
+![Snipaste_2023-06-11_10-50-35](https://github.com/Rain-kl/glider_guid41asd4asd/blob/master/img/Snipaste_2023-06-11_10-50-35.png)
 
 这样glider就运行起来了
 
@@ -124,4 +124,4 @@ proxies = {
 
 以下是使用rr策略的ip变换情况
 
-![Snipaste_2023-06-11_11-00-37](img\Snipaste_2023-06-11_11-00-37.png)
+![Snipaste_2023-06-11_11-00-37](https://github.com/Rain-kl/glider_guid41asd4asd/blob/master/img/Snipaste_2023-06-11_11-00-37.png)
