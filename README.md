@@ -88,7 +88,7 @@ forward=...
 
 
 
-如果你用的是“窗口的冲突”，可以打开配置目录C:\Users\你用户名\\.config\clash\profiles
+如果你用的是“Clash for Windows”，可以打开配置目录C:\Users\你用户名\\.config\clash\profiles
 
 ![Snipaste_2023-06-11_10-15-18](https://github.com/Rain-kl/glider_guid41asd4asd/blob/master/img/Snipaste_2023-06-11_10-15-18.png)
 
@@ -120,7 +120,7 @@ proxies = {
 
 ## 上网
 
-在“窗口的冲突”中新增配置信息，协议选择socks5，地址本地，端口为glider的端口，具体配置规范参考官方文档这里不做过多赘述，这里推荐使用lha策略，始终选择延迟最低的节点
+在“Clash for Windows”中新增配置信息，协议选择socks5，地址本地，端口为glider的端口，具体配置规范参考官方文档这里不做过多赘述，这里推荐使用lha策略，始终选择延迟最低的节点
 
 以下是使用rr策略的ip变换情况
 
