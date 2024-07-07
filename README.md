@@ -1,16 +1,15 @@
-# 【Glider】将节点转换成爬虫代理池，每秒切换IP
+# 通过【Glider】将机场节点作为爬虫代理池
 
 > Convert nodes into a spider proxy pool that switches IP every second
 
 ## 介绍
 
-当我们在使用爬虫时对一个网站进行多次爬取爬虫可能会被封禁，一般是针对IP进行封锁，所以如果我们切换IP就可以正常爬取了，于是我们就会用到代理池，目前代理池一个是免费的，但质量普遍较差，还有一个是付费的，费用普遍较高，超过我们的需求，那么有什么更好的办法呢？
+当我们在使用爬虫时对一个网站进行多次爬取爬虫可能会被封禁，一般是针对IP进行封锁，所以如果我们切换IP就可以正常爬取了，于是我们就会用到代理池，目前代理池一个是免费的，但质量普遍较差，还有一个是付费的，费用普遍较高，超过我们的需求
 
+最经济实惠的方法就是用机场的节点，配合Glider将其做为代理池使用
 
-
-当然是有的，就是用节点，配合Glider将其转换为代理池
-
-免责声明：本文仅探讨分享技术供大家学习，不提供节点获取途径。
+本项目主要介绍glider的作为代理池的使用，并没有参与glider项目的开发，如遇到glider的问题请到glider开发者下提issue
+本文仅探讨分享技术供大家学习，不提供节点获取途径。
 
 ## 安装
 
@@ -125,3 +124,32 @@ proxies = {
 以下是使用rr策略的ip变换情况
 
 ![Snipaste_2023-06-11_11-00-37](https://github.com/Rain-kl/glider_guid41asd4asd/blob/master/img/Snipaste_2023-06-11_11-00-37.png)
+
+
+# 节点转换程序【parse.py】的使用
+> 建议使用pycharm或vscode运行，需要安装一些第三方库
+1. 将clash内配置文件全部复制到config.yml内
+2. 运行订阅转换.py
+
+
+以下是节点的规范
+
+> trojan://密码@主机地址:端口?cert=PATH&key=PATH
+没有配置过trojan协议的节点，故不做讨论
+
+> vmess://加密方式:uuid@主机地址:端口?alterID=
+{ name: '香港', type: vmess, server: 'xxx.cn', port: 123, uuid: ac005860, alterId: 0, cipher: auto, udp: true }
+根据实测，加密方式填写auto程序无法执行，所以我统一按照none处理
+
+> ss://加密方式:密码@主机地址:端口
+{'name': '新加坡', 'type': 'ss', 'server': 'xxx.cn', 'port': 123, 'cipher': 'chacha20-ietf-poly1305', 'password': 'password', 'udp': True}
+
+节点转换程序写的比较简单，只能转换以上三种节点，如果有其他节点格式，可以自行修改代码，欢迎各位大佬提PR
+
+
+# 伪分布式爬虫参考模板
+改模板位于`distributed_crawler`文件夹内
+
+使用前需要将glider可执行程序放置在`distributed_crawler/core`文件夹下
+
+glider.conf为基础模板文件，内部仅添加forward节点，策略和配置请前往代码修改
