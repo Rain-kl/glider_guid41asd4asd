@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	clashapp "github.com/Rain-kl/Foam/backend/internal/application/clash"
@@ -105,6 +107,54 @@ proxies:
 
 	if listRec.Code != http.StatusOK {
 		t.Fatalf("expected HTTP 200, got %d", listRec.Code)
+	}
+}
+
+func TestInspectKernelHTTP_MissingBinary(t *testing.T) {
+	engine, _ := setupTestServer(t)
+
+	missing := t.TempDir() + "/no-such-mihomo"
+	body, err := json.Marshal(map[string]string{"install_path": missing})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/clash/kernels/inspect", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	engine.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("InspectKernel HTTP status = %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte("未找到 Mihomo 二进制文件")) {
+		t.Fatalf("InspectKernel body = %s, want missing-binary message", rec.Body.String())
+	}
+	if bytes.Contains(rec.Body.Bytes(), []byte("未找到 Mihomo 二进制文件: mihomo")) {
+		t.Fatalf("InspectKernel still reports bare mihomo: %s", rec.Body.String())
+	}
+}
+
+func TestInspectKernelHTTP_InvalidBinaryIsBadRequest(t *testing.T) {
+	engine, _ := setupTestServer(t)
+
+	dummy := filepath.Join(t.TempDir(), "mihomo")
+	if err := os.WriteFile(dummy, []byte("not-mihomo"), 0o755); err != nil {
+		t.Fatalf("write dummy binary: %v", err)
+	}
+	body, err := json.Marshal(map[string]string{"install_path": dummy})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/clash/kernels/inspect", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	engine.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("InspectKernel HTTP status = %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+	if bytes.Contains(rec.Body.Bytes(), []byte("internalError")) {
+		t.Fatalf("InspectKernel treated invalid binary as 500: %s", rec.Body.String())
 	}
 }
 

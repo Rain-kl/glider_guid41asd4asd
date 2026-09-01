@@ -22,13 +22,12 @@ import (
 	"github.com/Rain-kl/Foam/backend/internal/repository"
 )
 
-
-
 var (
-	ErrNotFound      = repository.ErrNotFound
-	ErrInvalidInput  = errors.New("请求参数无效")
-	ErrKernelRunning = errors.New("内核已在运行中")
-	ErrKernelStopped = errors.New("内核未运行")
+	ErrNotFound       = repository.ErrNotFound
+	ErrInvalidInput   = errors.New("请求参数无效")
+	ErrKernelRunning  = errors.New("内核已在运行中")
+	ErrKernelStopped  = errors.New("内核未运行")
+	ErrBinaryNotFound = kernelctrl.ErrBinaryNotFound
 )
 
 type Service struct {
@@ -84,20 +83,30 @@ func (s *Service) getDefaultTestURL(ctx context.Context) string {
 	return "https://cp.cloudflare.com/generate_204"
 }
 
-// resolveMihomoBinaryPath picks binary path in order:
-// explicit request value → runtime settings → DefaultMihomoBinaryPath / env,
-// then resolves relative paths against the project root.
-func (s *Service) resolveMihomoBinaryPath(ctx context.Context, explicit string) string {
-	path := strings.TrimSpace(explicit)
-	if path == "" && s.settingsRepo != nil {
+// configuredMihomoPath picks the unresolved configured path:
+// explicit request → persisted settings → env / ./data/core/mihomo.
+// Kernel filesystem rules (project root, Windows .exe, existence) live in
+// kernel.ResolveBinaryPath / kernel.LocateBinary — callers must not invent
+// a fourth fallback such as the bare command name "mihomo".
+func (s *Service) configuredMihomoPath(ctx context.Context, explicit string) string {
+	if path := strings.TrimSpace(explicit); path != "" {
+		return path
+	}
+	if s.settingsRepo != nil {
 		if cfg, _, _, ok, err := s.settingsRepo.Get(ctx); err == nil && ok {
-			path = strings.TrimSpace(cfg.Clash.MihomoBinaryPath)
+			if path := strings.TrimSpace(cfg.Clash.MihomoBinaryPath); path != "" {
+				return path
+			}
 		}
 	}
-	if path == "" {
-		path = kernelctrl.DefaultMihomoBinaryPath()
-	}
-	return kernelctrl.ResolveProjectDataPath(path)
+	return kernelctrl.DefaultMihomoBinaryPath()
+}
+
+// locateMihomoBinary is the application gate used before side effects
+// (start kernel, batch node test). Kernel inspect/test still Locate on
+// the path they receive; StartMihomoProcess does not.
+func (s *Service) locateMihomoBinary(ctx context.Context, explicit string) (string, error) {
+	return kernelctrl.LocateBinary(s.configuredMihomoPath(ctx, explicit))
 }
 
 func (s *Service) getDefaultNodeTestTimeout(ctx context.Context) time.Duration {
@@ -517,8 +526,11 @@ func (s *Service) TestNodesBatch(ctx context.Context, input TestNodesBatchInput)
 		return []TestNodeResultView{}, nil
 	}
 
-	// Same path resolution as StartKernel — never fall back to bare "mihomo".
-	input.BinaryPath = s.resolveMihomoBinaryPath(ctx, input.BinaryPath)
+	located, locErr := s.locateMihomoBinary(ctx, input.BinaryPath)
+	if locErr != nil {
+		return nil, locErr
+	}
+	input.BinaryPath = located
 	if input.TestURL == "" {
 		input.TestURL = s.getDefaultTestURL(ctx)
 	}
@@ -838,11 +850,6 @@ func normalizeStartKernelInput(input *StartKernelInput) {
 	if input.KernelType == "" {
 		input.KernelType = "mihomo"
 	}
-	// Relative / empty paths are resolved against project root (same as node test).
-	if input.BinaryPath == "" {
-		input.BinaryPath = kernelctrl.DefaultMihomoBinaryPath()
-	}
-	input.BinaryPath = kernelctrl.ResolveProjectDataPath(input.BinaryPath)
 	if input.WorkDir == "" {
 		input.WorkDir = "./data/runtime"
 	}
@@ -857,6 +864,11 @@ func (s *Service) StartKernel(ctx context.Context, input StartKernelInput) (*cla
 	// stringLogWriter.Write acquires logMu; s.mu is only held for short pointer swaps.
 
 	normalizeStartKernelInput(&input)
+	located, locErr := s.locateMihomoBinary(ctx, input.BinaryPath)
+	if locErr != nil {
+		return nil, locErr
+	}
+	input.BinaryPath = located
 
 	if err := os.MkdirAll(input.WorkDir, 0o755); err != nil { //nolint:gosec,mnd
 		return nil, fmt.Errorf("创建工作目录失败: %w", err)
@@ -1192,24 +1204,15 @@ func extractKernelError(logs []string) string {
 }
 
 func (s *Service) InspectKernelBinary(ctx context.Context, installPath string) (*kernelctrl.InstalledKernelBinary, error) {
-	if installPath == "" {
-		installPath = kernelctrl.DefaultMihomoBinaryPath()
-	}
-	return kernelctrl.InspectMihomoBinary(ctx, installPath)
+	return kernelctrl.InspectMihomoBinary(ctx, s.configuredMihomoPath(ctx, installPath))
 }
 
 func (s *Service) UploadKernelBinary(ctx context.Context, fileName string, installPath string, reader io.Reader) (*kernelctrl.InstalledKernelBinary, error) {
-	if installPath == "" {
-		installPath = kernelctrl.DefaultMihomoBinaryPath()
-	}
-	return kernelctrl.InstallUploadedMihomoBinary(ctx, fileName, installPath, reader)
+	return kernelctrl.InstallUploadedMihomoBinary(ctx, fileName, s.configuredMihomoPath(ctx, installPath), reader)
 }
 
 func (s *Service) DownloadKernelBinary(ctx context.Context, installPath string) (*kernelctrl.InstalledKernelBinary, error) {
-	if installPath == "" {
-		installPath = kernelctrl.DefaultMihomoBinaryPath()
-	}
-	return kernelctrl.DownloadAndInstallMihomoBinary(ctx, installPath)
+	return kernelctrl.DownloadAndInstallMihomoBinary(ctx, s.configuredMihomoPath(ctx, installPath))
 }
 
 func (s *Service) GetKernelInstance(ctx context.Context, kernelType string) (*clash.KernelInstance, error) {
@@ -1226,7 +1229,6 @@ func (s *Service) AutoStartKernel(ctx context.Context, logger interface {
 	Info(msg string, args ...any)
 	Warn(msg string, args ...any)
 }) {
-	defaultBinary := kernelctrl.DefaultMihomoBinaryPath()
 	const defaultWorkDir = "./data/runtime"
 
 	// 检查活动端口配置
@@ -1247,21 +1249,17 @@ func (s *Service) AutoStartKernel(ctx context.Context, logger interface {
 		return
 	}
 
-	// 检查内核二进制是否存在且可执行
-	binaryPath := kernelctrl.ResolveProjectDataPath(defaultBinary)
-	if info, statErr := os.Stat(binaryPath); statErr != nil || info.IsDir() {
-		logger.Info("auto_start_kernel: 内核二进制不存在，跳过自动启动", "path", binaryPath)
-		return
-	}
-
-	logger.Info("auto_start_kernel: 检测到可用配置与内核，正在自动启动内核…", "binary", binaryPath)
+	logger.Info("auto_start_kernel: 检测到可用的活动端口配置，正在自动启动内核…")
 
 	inst, startErr := s.StartKernel(ctx, StartKernelInput{
 		KernelType: "mihomo",
-		BinaryPath: defaultBinary,
 		WorkDir:    defaultWorkDir,
 	})
 	if startErr != nil {
+		if errors.Is(startErr, ErrBinaryNotFound) {
+			logger.Info("auto_start_kernel: 内核二进制不存在，跳过自动启动", "error", startErr)
+			return
+		}
 		logger.Warn("auto_start_kernel: 自动启动内核失败", "error", startErr)
 		return
 	}

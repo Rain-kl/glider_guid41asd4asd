@@ -18,21 +18,7 @@ import (
 const (
 	DefaultMihomoRepo = "MetaCubeX/mihomo"
 	GitHubReleasesAPI = "https://api.github.com/repos"
-
-	// EnvClashMihomoBinaryPath matches config.EnvClashMihomoBinaryPath.
-	// Duplicated here to avoid infra/clash/kernel → infra/config dependency.
-	envClashMihomoBinaryPath = "FOAM_CLASH_MIHOMO_BINARY_PATH"
-	fallbackMihomoBinaryPath = "./data/core/mihomo"
 )
-
-// DefaultMihomoBinaryPath returns FOAM_CLASH_MIHOMO_BINARY_PATH when set,
-// otherwise ./data/core/mihomo.
-func DefaultMihomoBinaryPath() string {
-	if v := strings.TrimSpace(os.Getenv(envClashMihomoBinaryPath)); v != "" {
-		return v
-	}
-	return fallbackMihomoBinaryPath
-}
 
 var installerHTTPClient = &http.Client{
 	Timeout: 3 * time.Minute,
@@ -59,15 +45,9 @@ type githubAsset struct {
 }
 
 func InspectMihomoBinary(ctx context.Context, installPath string) (*InstalledKernelBinary, error) {
-	resolvedPath, err := resolveExecutablePath(installPath)
+	resolvedPath, err := LocateBinary(installPath)
 	if err != nil {
 		return nil, err
-	}
-	if _, err = os.Stat(resolvedPath); err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("未找到 Mihomo 二进制文件: %s", resolvedPath)
-		}
-		return nil, fmt.Errorf("检查 Mihomo 二进制失败: %w", err)
 	}
 
 	detectedVersion, err := detectMihomoVersion(ctx, resolvedPath)
@@ -86,10 +66,7 @@ func InspectMihomoBinary(ctx context.Context, installPath string) (*InstalledKer
 }
 
 func InstallUploadedMihomoBinary(ctx context.Context, fileName string, installPath string, reader io.Reader) (*InstalledKernelBinary, error) {
-	resolvedPath, err := resolveExecutablePath(installPath)
-	if err != nil {
-		return nil, err
-	}
+	resolvedPath := ResolveBinaryPath(installPath)
 	tempPath, err := writeTempFile(filepath.Dir(resolvedPath), "mihomo-upload-", fileName, reader)
 	if err != nil {
 		return nil, err
@@ -98,10 +75,7 @@ func InstallUploadedMihomoBinary(ctx context.Context, fileName string, installPa
 }
 
 func DownloadAndInstallMihomoBinary(ctx context.Context, installPath string) (*InstalledKernelBinary, error) {
-	resolvedPath, err := resolveExecutablePath(installPath)
-	if err != nil {
-		return nil, err
-	}
+	resolvedPath := ResolveBinaryPath(installPath)
 	release, err := fetchLatestRelease(ctx)
 	if err != nil {
 		return nil, err
@@ -243,37 +217,6 @@ func installPreparedBinary(ctx context.Context, tempPath string, installPath str
 		ReleaseTag:      strings.TrimSpace(releaseTag),
 		InstalledAt:     time.Now(),
 	}, nil
-}
-
-func ResolveProjectRoot() string {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "."
-	}
-	if filepath.Base(cwd) == "backend" {
-		return filepath.Dir(cwd)
-	}
-	return cwd
-}
-
-func ResolveProjectDataPath(target string) string {
-	target = strings.TrimSpace(target)
-	if target == "" {
-		target = DefaultMihomoBinaryPath()
-	}
-	if filepath.IsAbs(target) {
-		return target
-	}
-	root := ResolveProjectRoot()
-	return filepath.Clean(filepath.Join(root, target))
-}
-
-func resolveExecutablePath(installPath string) (string, error) {
-	resolved := ResolveProjectDataPath(installPath)
-	if runtime.GOOS == "windows" && !strings.HasSuffix(strings.ToLower(resolved), ".exe") {
-		resolved += ".exe"
-	}
-	return filepath.Abs(resolved)
 }
 
 func writeTempFile(tempDir string, patternPrefix string, _ string, reader io.Reader) (string, error) {

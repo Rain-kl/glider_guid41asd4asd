@@ -3,11 +3,13 @@ package clash_test
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Rain-kl/Foam/backend/internal/application/clash"
 	domainclash "github.com/Rain-kl/Foam/backend/internal/domain/clash"
+	settingsdomain "github.com/Rain-kl/Foam/backend/internal/domain/settings"
 	"github.com/Rain-kl/Foam/backend/internal/infra/persistence/relational"
 )
 
@@ -35,6 +37,60 @@ func setupTestService(t *testing.T) (*clash.Service, context.Context) {
 
 	svc := clash.NewService(sourceRepo, nodeRepo, testResRepo, profileRepo, tplRepo, rtRepo, kernelRepo, nil)
 	return svc, ctx
+}
+
+func setupTestServiceWithSettings(t *testing.T) (*clash.Service, context.Context, *relational.RuntimeSettingsRepository) {
+	t.Helper()
+	ctx := context.Background()
+
+	tmpDir := t.TempDir()
+	db, err := relational.OpenSQLite(ctx, tmpDir+"/test.db")
+	if err != nil {
+		t.Fatalf("failed to create test db: %v", err)
+	}
+	if err := db.InitializeSchema(ctx); err != nil {
+		t.Fatalf("failed to initialize schema: %v", err)
+	}
+
+	sourceRepo := relational.NewSourceConfigRepository(db)
+	nodeRepo := relational.NewProxyNodeRepository(db)
+	testResRepo := relational.NewNodeTestResultRepository(db)
+	profileRepo := relational.NewPortProfileRepository(db)
+	tplRepo := relational.NewPortProfileTemplateRepository(db)
+	rtRepo := relational.NewRuntimeConfigRepository(db)
+	kernelRepo := relational.NewKernelInstanceRepository(db)
+	settingsRepo := relational.NewRuntimeSettingsRepository(db)
+
+	svc := clash.NewService(sourceRepo, nodeRepo, testResRepo, profileRepo, tplRepo, rtRepo, kernelRepo, settingsRepo)
+	return svc, ctx, settingsRepo
+}
+
+func importOneTestNode(t *testing.T, svc *clash.Service, ctx context.Context) int {
+	t.Helper()
+	yamlContent := `
+proxies:
+  - name: "Node-1"
+    type: ss
+    server: 1.1.1.1
+    port: 8388
+    cipher: aes-256-gcm
+    password: "secretpassword"
+`
+	cfg, _, err := svc.UploadSourceConfig(ctx, clash.UploadSourceConfigInput{
+		Filename:   "nodes.yaml",
+		RawContent: yamlContent,
+	})
+	if err != nil {
+		t.Fatalf("UploadSourceConfig: %v", err)
+	}
+	if _, err := svc.ConfirmSourceConfig(ctx, cfg.ID); err != nil {
+		t.Fatalf("ConfirmSourceConfig: %v", err)
+	}
+	nodes, _, err := svc.ListNodes(ctx, 1, 10, domainclash.ProxyNodeFilter{})
+	if err != nil || len(nodes) == 0 {
+		t.Fatalf("ListNodes: err=%v len=%d", err, len(nodes))
+	}
+	return nodes[0].ID
 }
 
 func TestUploadSourceConfigAndConfirm(t *testing.T) {
@@ -443,63 +499,163 @@ func TestGetKernelCapabilities(t *testing.T) {
 	}
 }
 
+func assertBatchMissingBinary(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("TestNodesBatch() error = nil, want ErrBinaryNotFound")
+	}
+	if !errors.Is(err, clash.ErrBinaryNotFound) {
+		t.Fatalf("TestNodesBatch() error = %v, want ErrBinaryNotFound", err)
+	}
+	if err.Error() == "未找到 Mihomo 二进制文件: mihomo" {
+		t.Fatalf("binary path not resolved (still bare mihomo): %s", err)
+	}
+}
+
 func TestTestNodesBatch_ResolvesDefaultBinaryPath(t *testing.T) {
 	svc, ctx := setupTestService(t)
+	nodeID := importOneTestNode(t, svc, ctx)
 
-	// Import one node so batch test has work to do.
-	yamlContent := `
-proxies:
-  - name: "Node-1"
-    type: ss
-    server: 1.1.1.1
-    port: 8388
-    cipher: aes-256-gcm
-    password: "secretpassword"
-`
-	cfg, _, err := svc.UploadSourceConfig(ctx, clash.UploadSourceConfigInput{
-		Filename:   "nodes.yaml",
-		RawContent: yamlContent,
+	_, err := svc.TestNodesBatch(ctx, clash.TestNodesBatchInput{
+		NodeIDs: []int{nodeID},
 	})
-	if err != nil {
-		t.Fatalf("UploadSourceConfig: %v", err)
-	}
-	if _, err := svc.ConfirmSourceConfig(ctx, cfg.ID); err != nil {
-		t.Fatalf("ConfirmSourceConfig: %v", err)
-	}
-	nodes, _, err := svc.ListNodes(ctx, 1, 10, domainclash.ProxyNodeFilter{})
-	if err != nil || len(nodes) == 0 {
-		t.Fatalf("ListNodes: err=%v len=%d", err, len(nodes))
-	}
-
-	// Empty BinaryPath must NOT fall back to bare "mihomo".
-	// Without a real binary the test fails with a path error — assert the path is resolved.
-	results, err := svc.TestNodesBatch(ctx, clash.TestNodesBatchInput{
-		NodeIDs: []int{nodes[0].ID},
-		// BinaryPath intentionally empty
-	})
-	if err != nil {
-		t.Fatalf("TestNodesBatch: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("want 1 result, got %d", len(results))
-	}
-	if results[0].Success {
-		// Real mihomo present and node reachable — fine.
+	if err == nil {
+		// Default binary exists on this machine and the node test ran.
 		return
 	}
-	msg := results[0].ErrorMessage
-	if msg == "" {
-		t.Fatal("expected error message when binary missing or test fails")
+	assertBatchMissingBinary(t, err)
+	if !strings.Contains(err.Error(), "data") || !strings.Contains(err.Error(), "core") {
+		t.Fatalf("expected resolved data/core path in error, got: %s", err)
 	}
-	// Regression: previously used bare "mihomo" → "未找到 Mihomo 二进制文件: mihomo"
-	if msg == "未找到 Mihomo 二进制文件: mihomo" {
-		t.Fatalf("binary path not resolved (still bare mihomo): %s", msg)
+}
+
+func TestTestNodesBatch_UsesSettingsBinaryPath(t *testing.T) {
+	svc, ctx, settingsRepo := setupTestServiceWithSettings(t)
+	nodeID := importOneTestNode(t, svc, ctx)
+
+	customPath := filepath.Join(t.TempDir(), "custom-mihomo-from-settings")
+	if _, _, err := settingsRepo.Save(ctx, settingsdomain.Config{
+		Clash: settingsdomain.ClashConfig{MihomoBinaryPath: customPath},
+	}, 0); err != nil {
+		t.Fatalf("Save settings: %v", err)
 	}
-	if strings.Contains(msg, "未找到 Mihomo 二进制文件") {
-		// Must mention a resolved path (project data/core), not a bare name.
-		if !strings.Contains(msg, "data") || !strings.Contains(msg, "core") {
-			t.Fatalf("expected resolved data/core path in error, got: %s", msg)
+
+	_, err := svc.TestNodesBatch(ctx, clash.TestNodesBatchInput{
+		NodeIDs: []int{nodeID},
+	})
+	assertBatchMissingBinary(t, err)
+	if !strings.Contains(err.Error(), filepath.Base(customPath)) {
+		t.Fatalf("TestNodesBatch error = %q, want settings path %q", err, customPath)
+	}
+}
+
+func TestTestNodesBatch_ExplicitPathWinsOverSettings(t *testing.T) {
+	svc, ctx, settingsRepo := setupTestServiceWithSettings(t)
+	nodeID := importOneTestNode(t, svc, ctx)
+
+	settingsPath := filepath.Join(t.TempDir(), "from-settings")
+	explicitPath := filepath.Join(t.TempDir(), "from-request")
+	if _, _, err := settingsRepo.Save(ctx, settingsdomain.Config{
+		Clash: settingsdomain.ClashConfig{MihomoBinaryPath: settingsPath},
+	}, 0); err != nil {
+		t.Fatalf("Save settings: %v", err)
+	}
+
+	_, err := svc.TestNodesBatch(ctx, clash.TestNodesBatchInput{
+		NodeIDs:    []int{nodeID},
+		BinaryPath: explicitPath,
+	})
+	if err == nil {
+		t.Fatal("TestNodesBatch() error = nil, want missing explicit binary")
+	}
+	if !strings.Contains(err.Error(), filepath.Base(explicitPath)) {
+		t.Fatalf("TestNodesBatch() error = %q, want explicit path %q", err, explicitPath)
+	}
+	if strings.Contains(err.Error(), filepath.Base(settingsPath)) {
+		t.Fatalf("TestNodesBatch() error = %q, settings path should not win over explicit", err)
+	}
+}
+
+func TestStartKernel_MissingBinary(t *testing.T) {
+	svc, ctx := setupTestService(t)
+	missing := filepath.Join(t.TempDir(), "no-such-mihomo")
+	_, err := svc.StartKernel(ctx, clash.StartKernelInput{BinaryPath: missing})
+	if err == nil {
+		t.Fatal("StartKernel() error = nil, want ErrBinaryNotFound")
+	}
+	if !errors.Is(err, clash.ErrBinaryNotFound) {
+		t.Fatalf("StartKernel() error = %v, want ErrBinaryNotFound", err)
+	}
+	if !strings.Contains(err.Error(), filepath.Base(missing)) {
+		t.Fatalf("StartKernel() error = %q, want path %q", err, missing)
+	}
+}
+
+type recordingLogger struct {
+	infos []string
+	warns []string
+}
+
+func (l *recordingLogger) Info(msg string, _ ...any) {
+	l.infos = append(l.infos, msg)
+}
+
+func (l *recordingLogger) Warn(msg string, _ ...any) {
+	l.warns = append(l.warns, msg)
+}
+
+func TestAutoStartKernel_MissingBinaryLogsInfoNotWarn(t *testing.T) {
+	svc, ctx, settingsRepo := setupTestServiceWithSettings(t)
+	nodeID := importOneTestNode(t, svc, ctx)
+	missing := filepath.Join(t.TempDir(), "no-auto-start-mihomo")
+	if _, _, err := settingsRepo.Save(ctx, settingsdomain.Config{
+		Clash: settingsdomain.ClashConfig{MihomoBinaryPath: missing},
+	}, 0); err != nil {
+		t.Fatalf("Save settings: %v", err)
+	}
+	if _, err := svc.CreatePortProfile(ctx, &domainclash.PortProfile{
+		Name:             "auto-start",
+		MixedPort:        7890,
+		IncludeInRuntime: true,
+	}, []int{nodeID}); err != nil {
+		t.Fatalf("CreatePortProfile: %v", err)
+	}
+
+	log := &recordingLogger{}
+	svc.AutoStartKernel(ctx, log)
+	if len(log.warns) != 0 {
+		t.Fatalf("AutoStartKernel warns = %v, want none when binary is missing", log.warns)
+	}
+	found := false
+	for _, msg := range log.infos {
+		if strings.Contains(msg, "内核二进制不存在") {
+			found = true
+			break
 		}
+	}
+	if !found {
+		t.Fatalf("AutoStartKernel infos = %v, want missing-binary skip", log.infos)
+	}
+}
+
+func TestInspectKernelBinary_UsesSettingsPath(t *testing.T) {
+	svc, ctx, settingsRepo := setupTestServiceWithSettings(t)
+	customPath := filepath.Join(t.TempDir(), "inspect-from-settings")
+	if _, _, err := settingsRepo.Save(ctx, settingsdomain.Config{
+		Clash: settingsdomain.ClashConfig{MihomoBinaryPath: customPath},
+	}, 0); err != nil {
+		t.Fatalf("Save settings: %v", err)
+	}
+
+	_, err := svc.InspectKernelBinary(ctx, "")
+	if err == nil {
+		t.Fatal("InspectKernelBinary() error = nil, want missing settings binary")
+	}
+	if !errors.Is(err, clash.ErrBinaryNotFound) {
+		t.Fatalf("InspectKernelBinary() error = %v, want ErrBinaryNotFound", err)
+	}
+	if !strings.Contains(err.Error(), filepath.Base(customPath)) {
+		t.Fatalf("InspectKernelBinary() error = %q, want settings path %q", err, customPath)
 	}
 }
 

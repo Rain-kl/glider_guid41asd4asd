@@ -34,15 +34,9 @@ type MihomoNodeTestResult struct {
 
 //nolint:contextcheck
 func TestNodeWithMihomo(ctx context.Context, input MihomoNodeTestInput) (*MihomoNodeTestResult, error) {
-	binaryPath := strings.TrimSpace(input.BinaryPath)
-	if binaryPath == "" {
-		return nil, fmt.Errorf("未配置 Mihomo 二进制路径")
-	}
-	if _, err := os.Stat(binaryPath); err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("未找到 Mihomo 二进制文件: %s", binaryPath)
-		}
-		return nil, fmt.Errorf("读取 Mihomo 二进制文件失败: %v", err)
+	binaryPath, err := LocateBinary(input.BinaryPath)
+	if err != nil {
+		return nil, err
 	}
 
 	testURL := strings.TrimSpace(input.TestURL)

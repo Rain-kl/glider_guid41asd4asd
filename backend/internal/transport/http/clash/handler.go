@@ -589,6 +589,10 @@ func (h *Handler) inspectKernel(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req)
 	res, err := h.service.InspectKernelBinary(c.Request.Context(), req.InstallPath)
 	if err != nil {
+		if errors.Is(err, clashapp.ErrBinaryNotFound) {
+			writeServiceError(c, err)
+			return
+		}
 		response.Error(c, http.StatusBadRequest, "inspectFailed", err.Error())
 		return
 	}
@@ -684,6 +688,8 @@ func writeServiceError(c *gin.Context, err error) {
 		response.Error(c, http.StatusConflict, "kernelRunning", "内核已在运行中")
 	case errors.Is(err, clashapp.ErrKernelStopped):
 		response.Error(c, http.StatusBadRequest, "kernelStopped", "内核未运行")
+	case errors.Is(err, clashapp.ErrBinaryNotFound):
+		response.Error(c, http.StatusBadRequest, "binaryNotFound", err.Error())
 	default:
 		response.Error(c, http.StatusInternalServerError, "internalError", err.Error())
 	}
